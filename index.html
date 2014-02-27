@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link href='https://fonts.googleapis.com/css?family=Architects+Daughter' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
+    <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
+
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+
+    <title>Pegmatite by davidchisnall</title>
+  </head>
+
+  <body>
+    <header>
+      <div class="inner">
+        <h1>Pegmatite</h1>
+        <h2>A PEG library that rocks!</h2>
+        <a href="https://github.com/davidchisnall/Pegmatite" class="button"><small>View project on</small>GitHub</a>
+      </div>
+    </header>
+
+    <div id="content-wrapper">
+      <div class="inner clearfix">
+        <section id="main-content">
+          <h1>
+<a name="pegmatite-design-overview" class="anchor" href="#pegmatite-design-overview"><span class="octicon octicon-link"></span></a>Pegmatite design overview</h1>
+
+<p>This is a fork and extensive rewrite of Achilleas Margaritis's ParserLib.  It
+has the following goals:</p>
+
+<ul>
+<li>Idiomatic C++11</li>
+<li>Simple use</li>
+<li>Reuseable, reentrant grammars with multiple action delegates</li>
+<li>No dependency on RTTI / exceptions (usable in embedded contexts)</li>
+</ul><p>It has the following explicit non-goals:</p>
+
+<ul>
+<li>High performance (ease of use or modification should not be sacrificed in the
+name of performance)</li>
+<li>Compatibility with the old ParserLib</li>
+</ul><h2>
+<a name="design-outline" class="anchor" href="#design-outline"><span class="octicon octicon-link"></span></a>Design outline</h2>
+
+<p>All rules should be immutable after creation.  Ideally they'd be constexpr, but
+this is likely not to be possible.  They should have no state associated with
+them, however, and so parsing should be entirely reentrant.  State, for a
+grammar, is in two categories:</p>
+
+<ul>
+<li>The current parsing state</li>
+<li>The actions to be performed when parsing</li>
+</ul><p>The actions can also be immutable (they don't change over a parse, at least),
+but should not be tied to the grammar.  It should be possible to write one
+singleton class encapsulating the grammar, with members for the rules, and
+singleton subclasses (or, ideally, delegates) providing parser actions.  The
+parsing state should be entirely contained within a context object and so the
+same grammar can be used from multiple threads and can be used for compilation,
+syntax highlighting, and so on.</p>
+
+<h2>
+<a name="defining-a-grammar" class="anchor" href="#defining-a-grammar"><span class="octicon octicon-link"></span></a>Defining a grammar</h2>
+
+<p>You can create freestanding <code>Rule</code> instances, however the recommended way of
+creating a grammar is to place each rule inside a class.  The Calculator
+example follows this pattern, with a <code>CalculatorGrammar</code> class containing one
+field for each rule.  This is recommended for two reasons:</p>
+
+<p>1) It allows lazy creation, rather than requiring the rules to be instantiated
+    on program creation.  This gives faster start-up times and means that
+    memory is only used when the grammar is actually used.
+ 2) It improves encapsulation.  Although it is completely safe to refer to
+    rules in other grammars, placing them in a class makes it easy for people
+    binding actions to the grammar to identify all of the rules that they must
+    (or, might want to) provide actions for.</p>
+
+<p>Simple character or string recognising expressions can be created using the
+<code>_E</code> custom literal suffix.  For example <code>"int"_E</code> creates an expression that
+will match the literal string "int".  This is useful for terminals.</p>
+
+<p>You can define more complex operations from these by using the following
+operators (where <code>a</code> and <code>b</code> are expressions):</p>
+
+<ul>
+<li>
+<code>*a</code> matches zero or more instances of <code>a</code>
+</li>
+<li>
+<code>+a</code> matches one or more instances of <code>a</code>
+</li>
+<li>
+<code>-a</code> matches zero or one instance of <code>a</code>
+</li>
+<li>
+<code>a &gt;&gt; b</code> matches <code>a</code> and then <code>b</code>
+</li>
+<li>
+<code>a | b</code> matches either <code>a</code> or <code>b</code>
+</li>
+</ul><p>Newline rules have no special meaning in parsing, but are used to increment the
+line counter for input ranges.  If you declare a rule as matching a newline, it
+will increment the line counter every time it is successfully matched.</p>
+
+<p>Whitespace rules allow implicit whitespace in between all non-terminal
+expressions (sequences).</p>
+
+<h2>
+<a name="building-an-ast" class="anchor" href="#building-an-ast"><span class="octicon octicon-link"></span></a>Building an AST</h2>
+
+<p>The <code>ASTContainer</code> class is intended to be used as the superclass for most AST
+nodes.  Any <code>ASTPtr</code> and <code>ASTList</code> fields of subclasses of this class will
+automatically be created from the AST stack.  Each AST class that is
+constructed is pushed onto the stack in the order that it is constructed and
+then popped off by its parents.</p>
+
+<p>AST nodes do not, by default, keep around the <code>InputRange</code> of the text that
+they matched.  This is to save space for cases where it is not required.  If
+you intend to do helpful error reporting after semantic analysis, then it is
+strongly recommended that you do keep such a reference.</p>
+
+<p>After you have defined your grammar and AST, all that remains is to bind the
+two together.  To do this, create a subclass of <code>ASTParserDelegate</code>, with one
+<code>BindAST</code> field for each AST node, initialised with the corresponding grammar
+rule.  The following is the parser for the Calculator example:</p>
+
+<pre><code>class CalculatorParser : public ASTParserDelegate
+{
+    BindAST&lt;AST::Number&gt; num = CalculatorGrammar::get().num;
+    BindAST&lt;AST::AddExpression&gt; add = CalculatorGrammar::get().add_op;
+    BindAST&lt;AST::SubtractExpression&gt; sub = CalculatorGrammar::get().sub_op;
+    BindAST&lt;AST::MultiplyExpression&gt; mul = CalculatorGrammar::get().mul_op;
+    BindAST&lt;AST::DivideExpression&gt; div = CalculatorGrammar::get().div_op;
+public:
+    const CalculatorGrammar &amp;g = CalculatorGrammar::get();
+};
+</code></pre>
+
+<p>Invoking the <code>parse()</code> method on this class will cause an <code>AST::Number</code> class
+to be created for every terminal matching the <code>num</code> rule in the grammar, and so
+on.  Note that this parser is reentrant.  It is safe to use it from multiple
+threads to parse different strings.  It is therefore safe to also make the
+parser a singleton.</p>
+
+<h2>
+<a name="rtti-usage" class="anchor" href="#rtti-usage"><span class="octicon octicon-link"></span></a>RTTI Usage</h2>
+
+<p>ParserLib requires RTTI for one specific purpose: down-casting from <code>ast_node</code>
+to a subclass (and checking that the result really is of that class).  If you
+are using RTTI in the rest of your application, then you can instruct ParserLib
+to use RTTI for these casts by defining the <code>USE_RTTI</code> macro before including
+the ParserLib headers and when building ParserLib.</p>
+
+<p>If you do not wish to depend on RTTI, then ParserLib provides a macro that you
+can use in your own AST classes that will provide the required virtual
+functions to implement ad-hoc RTTI for this specific use.  You use them like
+this:</p>
+
+<pre><code>class MyASTClass : parserlib::ast_node
+{
+    /* Your methods go here. */
+    PARSELIB_RTTI(MyASTClass, parserlib::ast_node)
+};
+</code></pre>
+
+<p>This macro will be compiled away if you do define <code>USE_RTTI</code>, so you can
+provide grammars built with ParserLib that don't force consumers to use or
+not-use RTTI.  It is also completely safe to build without <code>USE_RTTI</code>, but
+still compile with RTTI.</p>
+
+<h2>
+<a name="what-is-pegmatite" class="anchor" href="#what-is-pegmatite"><span class="octicon octicon-link"></span></a>What is Pegmatite</h2>
+
+<p>Pegmatite is a very crystalline, intrusive igneous rock composed of
+interlocking crystals usually larger than 2.5 cm in size.</p>
+
+<p>It is also a Parsing Expression Grammar library that rocks!</p>
+
+<h2>
+<a name="to-do" class="anchor" href="#to-do"><span class="octicon octicon-link"></span></a>To do</h2>
+
+<p>Not in order:</p>
+
+<ul>
+<li>Write parameterised delegate for generating semantic HTML markup</li>
+<li>Check whether the <code>USE_RTTI</code> setting for the headers and library had to match
+it would be nice if it didn't...</li>
+</ul>
+        </section>
+
+        <aside id="sidebar">
+          <a href="https://github.com/davidchisnall/Pegmatite/zipball/master" class="button">
+            <small>Download</small>
+            .zip file
+          </a>
+          <a href="https://github.com/davidchisnall/Pegmatite/tarball/master" class="button">
+            <small>Download</small>
+            .tar.gz file
+          </a>
+
+          <p class="repo-owner"><a href="https://github.com/davidchisnall/Pegmatite"></a> is maintained by <a href="https://github.com/davidchisnall">davidchisnall</a>.</p>
+
+          <p>This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the Architect theme by <a href="https://twitter.com/jasonlong">Jason Long</a>.</p>
+        </aside>
+      </div>
+    </div>
+
+  
+  </body>
+</html>
