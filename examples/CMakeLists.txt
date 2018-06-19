@@ -5,3 +5,4 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 add_subdirectory(calculator)
+add_subdirectory(language-grammar)
